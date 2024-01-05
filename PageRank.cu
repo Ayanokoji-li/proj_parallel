@@ -5,17 +5,30 @@
 #include <sstream>
 #include <vector>
 #include <algorithm>
+#include <bitset>
+
+#define DAMPING_FACTOR 0.85
+#define EPSILON 1e-6
+
 
 // suppose weight is integer
 struct CSRMatrix {
-    std::vector<unsigned long long> csrVal;
-    std::vector<unsigned long long> csrRowPtr, csrColInd;
+    unsigned long long* csrVal;
+    unsigned long long* csrRowPtr;
+    unsigned long long* csrColInd;
     unsigned long long MaxVal;
-    unsigned long long numNonzeros;
+    unsigned long long EdgeNum;
+    unsigned long long VertexNum;
 
     CSRMatrix() {};
     CSRMatrix(const std::string &fileName) {
         readFromFile(fileName);
+    }
+
+    ~CSRMatrix() {
+        free(csrVal);
+        free(csrRowPtr);
+        free(csrColInd);
     }
 
     // input file format: Matrix market format
@@ -30,15 +43,15 @@ struct CSRMatrix {
         } while (line[0] == '%');
 
         std::stringstream s(line);
-        s >> numRows >> numCols >> numNonzeros;
-
-        csrRowPtr.resize(numRows + 1, 0);
-        csrVal.resize(numNonzeros);
-        csrColInd.resize(numNonzeros);
+        s >> numRows >> numCols >> EdgeNum;
+        VertexNum = numRows;
+        csrRowPtr = (unsigned long long*)malloc((numRows + 1) * sizeof(unsigned long long));
+        csrVal = (unsigned long long*)malloc(EdgeNum * sizeof(unsigned long long));
+        csrColInd = (unsigned long long*)malloc(EdgeNum * sizeof(unsigned long long));
 
         unsigned long long row, col;
         unsigned long long val;
-        for (int i = 0; i < numNonzeros; i++) {
+        for (int i = 0; i < EdgeNum; i++) {
             file >> row >> col >> val;
             row--;  // Convert to 0-based index
             col--;
@@ -55,78 +68,197 @@ struct CSRMatrix {
     }
 };
 
+// no stl
+struct EFGMatrix {
+    unsigned long long* data;
+    unsigned long long* vlist;
+    unsigned long long MaxVal;
+    unsigned long long EdgeNum;
+    unsigned long long VertexNum;
 
-class EFGMatrix {
-public:
-    std::vector<unsigned long long> vlist; // Vertex list
-    std::vector<int> num_lower_bits; // Number of lower bits used for EF encoding
-    std::vector<int> offsets; // Offsets into the data array
-    std::vector<unsigned long long> data; // EF encoded data
-
-    // Constructor from a CSR matrix
+    EFGMatrix() {};
     EFGMatrix(const std::string &fileName) {
-        initFromCSR(fileName);
+        readFromFile(fileName);
     }
 
-private:
-    // Initialize the EFGMatrix from a CSR matrix
-    void initFromCSR(const std::string &fileName) {
-        CSRMatrix csr(fileName);
-
-        // Initialize vlist array
-        vlist = csr.csrRowPtr;
-
-        // Initialize num_lower_bits, offsets and data arrays
-        num_lower_bits.resize(csr.csrRowPtr.size() - 1);
-        offsets.resize(csr.csrRowPtr.size() - 1);
-        data.clear();
-
-        for (int i = 0; i < csr.csrRowPtr.size() - 1; i++) {
-            // Get the neighbor list for vertex i
-            std::vector<int> neighbors(csr.csrColInd.begin() + csr.csrRowPtr[i], csr.csrColInd.begin() + csr.csrRowPtr[i + 1]);
-
-            // Compute the number of lower bits for EF encoding
-            num_lower_bits[i] = computeNumLowerBits(neighbors);
-
-            // Compute the offset into the data array
-            offsets[i] = data.size();
-
-            // Encode the neighbor list with EF and append it to the data array
-            std::vector<unsigned long long> encodedNeighbors = encodeWithEF(neighbors, num_lower_bits[i]);
-            data.insert(data.end(), encodedNeighbors.begin(), encodedNeighbors.end());
-        }
+    ~EFGMatrix() {
+        free(data);
+        free(vlist);
     }
 
-    // Compute the number of lower bits for EF encoding
-    int computeNumLowerBits(const std::vector<int> &neighbors) {
-        // Compute the maximum value in the neighbor list
-        int max_value = *std::max_element(neighbors.begin(), neighbors.end());
+    // input file format: Matrix market format
+    void readFromFile(const std::string &fileName) {
+        std::ifstream file(fileName);
+        std::string line;
+        unsigned long long numRows, numCols;
 
-        // Compute the number of lower bits
-        int num_lower_bits = max(0, (int)floor(log2(max_value / neighbors.size())));
+        // Skip header
+        do {
+            std::getline(file, line);
+        } while (line[0] == '%');
 
-        return num_lower_bits;
-    }
+        std::stringstream s(line);
+        s >> numRows >> numCols >> EdgeNum;
+        VertexNum = numRows;
+        data = (unsigned long long*)malloc(EdgeNum * sizeof(unsigned long long));
+        vlist = (unsigned long long*)malloc((numRows + 1) * sizeof(unsigned long long));
 
-    // Encode a neighbor list with EF
-    std::vector<unsigned long long> encodeWithEF(const std::vector<int> &neighbors, int num_lower_bits) {
-        std::vector<unsigned long long> encodedNeighbors;
-
-        // Encode each neighbor
-        for (int neighbor : neighbors) {
-            // Split the neighbor into lower and upper bits
-            unsigned long long lower_bits = neighbor & ((1 << num_lower_bits) - 1);
-            unsigned long long upper_bits = neighbor >> num_lower_bits;
-
-            // Encode the lower bits
-            encodedNeighbors.push_back(lower_bits);
-
-            // Encode the upper bits as unary coded gaps
-            if (upper_bits > 0) {
-                encodedNeighbors.push_back((1 << upper_bits) - 1);
-            }
+        unsigned long long row, col;
+        unsigned long long val;
+        for (int i = 0; i < EdgeNum; i++) {
+            file >> row >> col >> val;
+            row--;  // Convert to 0-based index
+            col--;
+            data[i] = val;
+            MaxVal = std::max(MaxVal, val);
+            vlist[row + 1]++;
         }
 
-        return encodedNeighbors;
+        // Compute row pointer array
+        for (unsigned long long i = 1; i <= numRows; i++) {
+            vlist[i] += vlist[i - 1];
+        }
     }
 };
+
+__global__ void pagerank(unsigned long long* csrVal, unsigned long long* csrRowPtr, unsigned long long* csrColInd, double* x, double* y, unsigned long long num_nodes) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < num_nodes) {
+        double sum = 0.0f;
+        unsigned long long num_neighbors = csrRowPtr[i + 1] - csrRowPtr[i];
+        for (int j = csrRowPtr[i]; j < csrRowPtr[i + 1]; j++) {
+            int col = csrColInd[j];
+            sum += x[col] / csrVal[j];
+        }
+        y[i] = (1 - DAMPING_FACTOR) / num_nodes + DAMPING_FACTOR * sum;
+        if (num_neighbors == 0) {
+            y[i] += (1 - DAMPING_FACTOR) / num_nodes;
+        }
+    }
+}
+
+int main(int argc, char** argv) {
+    std::string file_name = "web-Google.mtx";
+    bool method = 0;
+    if(argc != 2) 
+    {
+        std::cout << "default into file: web-Google.mtx" << std::endl;
+    }
+    else
+    {
+        file_name = argv[1];
+        std::cout << "input file: " << file_name << std::endl;
+    }
+
+    // Initialize host value
+    CSRMatrix csr(file_name);
+    EFGMatrix efg();
+    int N = csr.VertexNum;
+    double* x = (double*)malloc(N * sizeof(double));
+    double* y = (double*)malloc(N * sizeof(double));
+    double init = 1.0f / N;
+    for(int i = 0; i < N; i++) {
+        x[i] = init;
+    }
+    memset(y, 0, N * sizeof(double));
+
+    // Initialize device value
+    unsigned long long* d_Val;
+    unsigned long long* d_RowPtr;
+    unsigned long long* d_ColData;
+    double* d_x;
+    double* d_y;
+    if(method == 0)
+    {
+        cudaMalloc((void**)&d_Val, csr.EdgeNum * sizeof(unsigned long long));
+        cudaMalloc((void**)&d_RowPtr, (csr.VertexNum + 1) * sizeof(unsigned long long));
+        cudaMalloc((void**)&d_ColData, csr.EdgeNum * sizeof(unsigned long long));
+        cudaMemcpy(d_Val, csr.csrVal, csr.EdgeNum * sizeof(unsigned long long), cudaMemcpyHostToDevice);
+        cudaMemcpy(d_RowPtr, csr.csrRowPtr, (csr.VertexNum + 1) * sizeof(unsigned long long), cudaMemcpyHostToDevice);
+        cudaMemcpy(d_ColData, csr.csrColInd, csr.EdgeNum * sizeof(unsigned long long), cudaMemcpyHostToDevice);
+    }
+    else
+    {
+        // cudaMalloc((void**)&d_Val, efg.data.size() * sizeof(unsigned long long));
+        // cudaMalloc((void**)&d_RowPtr, (efg.vlist.size()) * sizeof(unsigned long long));
+        // cudaMalloc((void**)&d_ColData, efg.data.size() * sizeof(unsigned long long));
+        // cudaMemcpy(d_Val, efg.data, efg.data.size() * sizeof(unsigned long long), cudaMemcpyHostToDevice);
+        // cudaMemcpy(d_RowPtr, efg.vlist, (efg.vlist.size()) * sizeof(unsigned long long), cudaMemcpyHostToDevice);
+        // cudaMemcpy(d_ColData, efg.data, efg.data.size() * sizeof(unsigned long long), cudaMemcpyHostToDevice);
+    }
+    cudaMalloc((void**)&d_x, N * sizeof(double));
+    cudaMalloc((void**)&d_y, N * sizeof(double));
+    cudaMemcpy(d_x, x, N * sizeof(double), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_y, y, N * sizeof(double), cudaMemcpyHostToDevice);
+
+    // Perform PageRank iterations
+    int max_iterations = 1000;
+    double error = 1.0f;
+    double* temp;
+    while (error > EPSILON && max_iterations > 0) {
+        pagerank<<<(N + 255) / 256, 256>>>(d_Val, d_RowPtr, d_ColData, d_x, d_y, N);
+        cudaMemcpy(y, d_y, N * sizeof(double), cudaMemcpyDeviceToHost);
+        error = 0.0f;
+        for (int i = 0; i < N; i++) {
+            error += std::abs(y[i] - x[i]);
+        }
+        std::swap(x, y);
+        max_iterations--;
+    }
+
+    // CUP pagerank
+    double* c_x = (double*)malloc(N * sizeof(double));
+    double* c_y = (double*)malloc(N * sizeof(double));
+    for(int i = 0; i < N; i++) {
+        c_x[i] = init;
+    }
+    memset(c_y, 0, N * sizeof(double));
+    while (error > EPSILON && max_iterations > 0) {
+        for (int i = 0; i < N; i++) {
+            double sum = 0.0f;
+            unsigned long long num_neighbors = csr.csrRowPtr[i + 1] - csr.csrRowPtr[i];
+            for (int j = csr.csrRowPtr[i]; j < csr.csrRowPtr[i + 1]; j++) {
+                int col = csr.csrColInd[j];
+                sum += c_x[col] / csr.csrVal[j];
+            }
+            c_y[i] = (1 - DAMPING_FACTOR) / N + DAMPING_FACTOR * sum;
+            if (num_neighbors == 0) {
+                c_y[i] += (1 - DAMPING_FACTOR) / N;
+            }
+        }
+        error = 0.0f;
+        for (int i = 0; i < N; i++) {
+            error += std::abs(c_y[i] - c_x[i]);
+        }
+        std::swap(c_x, c_y);
+        max_iterations--;
+    }
+
+    unsigned long long i;
+    // verify result between GPU and CPU
+    for(i = 0; i < N; i ++)
+    {
+        if(std::abs(c_y[i] - y[i]) > 1e-4)
+        {
+            std::cout << "error in " << i << " " << c_y[i] << " " << y[i] << std::endl;
+            break;
+        }
+    }
+    if(i == N)
+    {
+        std::cout << "verify success" << std::endl;
+    }
+
+    // Free memory on the device
+    cudaFree(d_Val);
+    cudaFree(d_RowPtr);
+    cudaFree(d_ColData);
+    cudaFree(d_x);
+    cudaFree(d_y);
+
+    // Free memory on the host
+    free(x);
+    free(y);
+
+    return 0;
+}
