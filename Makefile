@@ -1,8 +1,8 @@
 CUDA_ROOT_DIR=/usr/local/cuda
-FOLLY_INSTALL_DIR=/data/pgera6/folly_23_install/installed/folly
-FMT_INSTALL_DIR=/data/pgera6/folly_23_install/installed/fmt-5d79UHBn4Hso1yL1LQBoyTVMWd1GqtqLE_u_Lyf2M5s
+FOLLY_INSTALL_DIR=/tmp/folly_install/installed/folly
+FMT_INSTALL_DIR=/tmp/folly_install/installed/fmt-SlVKTvaA7LFzQBtcDmR9zQRKia4WSMqxR9LL8JZrBmM
 CXX = /usr/bin/g++
-CXXFLAGS = --std=c++17 -O3 -fPIC -fopenmp -Wall -I$(FOLLY_INSTALL_DIR)/include
+CXXFLAGS = --std=c++17 -O3 -fPIC -fopenmp -Wall -I$(FOLLY_INSTALL_DIR)/include/folly
 LDFLAGS= -fopenmp -L$(FOLLY_INSTALL_DIR)/lib -L$(FMT_INSTALL_DIR)/lib
 LDLIBS= -lstdc++fs -lglog -lfolly -ldouble-conversion -lboost_program_options -ldl -lfmt -lssl -lcrypto
 

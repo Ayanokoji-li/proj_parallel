@@ -14,6 +14,7 @@ class EFGraph;
 
 template <size_t kSkipQuantum, size_t kForwardQuantum>
 class EFLayout {
+protected:
     const CSR& csr_;
     size_t num_vertices_, num_edges_;
     std::vector<size_t> chunk_off_exsum_;

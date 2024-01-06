@@ -14,6 +14,8 @@ class CUEFGraph;
 
 template <size_t kSkipQuantum, size_t kForwardQuantum>
 class EFGraph {
+
+protected:
     const EFLayout<kSkipQuantum, kForwardQuantum>& ef_layout_;
     const ef_param_t ef_param_;
     size_t num_vertices_, num_edges_;

@@ -4,6 +4,8 @@
 #include <vector>
 
 class CSR {
+
+protected:
     size_t num_vertices_;
     size_t num_edges_;
     std::vector<uint64_t> vlist_;
@@ -16,6 +18,7 @@ class CSR {
 
 public:
     CSR(const std::string& dir);
+    CSR(){};
     uint64_t get_max_degree() const;
     uint64_t get_degree(uint64_t vid) const;
     std::pair<
