@@ -15,5 +15,5 @@ class EFLayout_ForPG : public EFLayout
 public:
     EFLayout_ForPG(const csr_for_pg& csr) : EFLayout(csr) {efVal = csr.csrVal;};
 
-    const std::vector<double>& getEFVal() const {return efVal;};
+    const std::vector<double>& GetVal() const {return efVal;};
 };

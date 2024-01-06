@@ -5,6 +5,7 @@
 
 template <size_t kSkipQuantum, size_t kForwardQuantum>
 class CUEFGraph {
+protected:
     const EFGraph<kSkipQuantum, kForwardQuantum>* ef_graph_ptr_;
     const EFGraph<kSkipQuantum, kForwardQuantum>& ef_graph_;
     const size_t num_vertices_, num_edges_;
