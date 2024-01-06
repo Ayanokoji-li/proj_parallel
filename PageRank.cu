@@ -7,123 +7,20 @@
 #include <algorithm>
 #include <bitset>
 #include <omp.h>
-#include <cusparse.h>
+#include <tuple>
+#include "CSR.hpp"
 
 #define DAMPING_FACTOR 0.85
 #define EPSILON 1e-6
 
-// T is the type of the matrix's value
-template <typename T>
-struct CSRMatrix {
-    T* csrVal;
-    unsigned long long* csrRowPtr;
-    unsigned long long* csrColInd;
-    unsigned long long EdgeNum;
-    unsigned long long VertexNum;
-
-    CSRMatrix() {};
-    CSRMatrix(const std::string &fileName) {
-        readFromFile(fileName);
-    }
-
-    ~CSRMatrix() {
-        free(csrVal);
-        free(csrRowPtr);
-        free(csrColInd);
-    }
-
-    void Transpose(CSRMatrix<T> &dst)
-    {
-        dst.VertexNum = VertexNum;
-        dst.EdgeNum = EdgeNum;
-        dst.csrVal = (T*)malloc(EdgeNum * sizeof(T));
-        dst.csrRowPtr = (unsigned long long*)malloc((VertexNum + 1) * sizeof(unsigned long long));
-        dst.csrColInd = (unsigned long long*)malloc(EdgeNum * sizeof(unsigned long long));
-        // cusparseHandle_t handle;
-        // cusparseCreate(&handle);
-
-        // void *buffer = NULL;
-        // unsigned long long *cscColPtr, *cscRowInd;
-        // T *cscVal;
-
-        // unsigned long long bufferSize = 0;
-        // cusparseCsr2cscEx2_bufferSize(handle, EdgeNum, EdgeNum, VertexNum, 
-        //                                 csrVal, csrRowPtr, csrColInd, dst.csrVal, dst.csrRowPtr, dst.csrColInd, 
-        //                                 CUDA_R_64F, CUSPARSE_ACTION_NUMERIC, CUSPARSE_INDEX_BASE_ZERO, CUSPARSE_CSR2CSC_ALG1, 
-        //                                 &bufferSize);
-        // buffer = malloc(bufferSize);
-
-        // cusparseCsr2cscEx2(handle, EdgeNum, EdgeNum, VertexNum,
-        //                 csrVal, csrRowPtr, csrColInd,
-        //                 dst.cscVal, dst.cscRowInd, dst.cscColPtr,
-        //                 CUDA_R_64F,
-        //                 CUSPARSE_ACTION_NUMERIC,
-        //                 CUSPARSE_INDEX_BASE_ZERO, buffer);
-
-        // cusparseDestroy(handle);
-    }
-
-    void readFromFile(const std::string &fileName)
-    {
-        std::ifstream file(fileName);
-        std::string line;
-        unsigned long long numRows, numCols;
-
-        // Skip header
-        do {
-            std::getline(file, line);
-        } while (line[0] == '%');
-
-        std::stringstream s(line);
-        s >> numRows >> numCols >> EdgeNum;
-        VertexNum = numRows;
-        csrVal = (T*)malloc(EdgeNum * sizeof(T));
-        csrRowPtr = (unsigned long long*)malloc((VertexNum + 1) * sizeof(unsigned long long));
-        csrColInd = (unsigned long long*)malloc(EdgeNum * sizeof(unsigned long long));
-        unsigned long long index = 0;
-        for (unsigned long long i = 0; i < EdgeNum; i++) {
-            file >> csrRowPtr[i] >> csrColInd[i] >> csrVal[i];
-            csrRowPtr[i]--;  // Convert to 0-based index
-            csrColInd[i]--;
-        }
-        csrRowPtr[VertexNum] = EdgeNum;
-    }
-
-    void TransitionProb(CSRMatrix<double> &dst)
-    {
-
-    }
-};
-
-void TransitionProb(CSRMatrix<int> &src, CSRMatrix<double> &dst)
-{
-    dst.VertexNum = src.VertexNum;
-    dst.EdgeNum = src.EdgeNum;
-    dst.csrVal = (double*)malloc(dst.EdgeNum * sizeof(double));
-    dst.csrRowPtr = (unsigned long long*)malloc((dst.VertexNum + 1) * sizeof(unsigned long long));
-    dst.csrColInd = (unsigned long long*)malloc(dst.EdgeNum * sizeof(unsigned long long));
-    dst.csrRowPtr[0] = 0;
-    for(unsigned long long i = 0; i < dst.VertexNum; i++)
-    {
-        unsigned long long sum = 0;
-        for(unsigned long long j = src.csrRowPtr[i]; j < src.csrRowPtr[i + 1]; j++)
-        {
-            sum += src.csrVal[j];
-        }
-        for(unsigned long long j = src.csrRowPtr[i]; j < src.csrRowPtr[i + 1]; j++)
-        {
-            dst.csrVal[j] = (double)src.csrVal[j] / sum;
-            dst.csrColInd[j] = src.csrColInd[j];
-        }
-        dst.csrRowPtr[i + 1] = src.csrRowPtr[i + 1];
-    }
-}
-
 // no stl
+template <typename T>
 struct EFGMatrix {
-    unsigned long long* data;
-    unsigned long long* vlist;
-    unsigned long long MaxVal;
+    T* efgVal;
+    unsigned long long* efgRowPtr;
+    std::bitset* efgLowBits;
+    int* efgLowBitsNum;
+    std::bitset* efgHighBits;
     unsigned long long EdgeNum;
     unsigned long long VertexNum;
 
@@ -136,7 +33,7 @@ struct EFGMatrix {
 };
 
 template <typename T>
-__global__ void pagerank_csr(T* csrVal, unsigned long long* csrRowPtr, unsigned long long* csrColInd, double* x, double* y, unsigned long long num_nodes) {
+__global__ void pagerank_csr(T* csrVal, unsigned long long* csrRowPtr, unsigned long long* csrColInd, double* x, double* y, double* error, unsigned long long num_nodes) {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i < num_nodes) {
         double sum = 0.0f;
@@ -145,8 +42,38 @@ __global__ void pagerank_csr(T* csrVal, unsigned long long* csrRowPtr, unsigned 
             sum += x[col] * (double)csrVal[j];
         }
         y[i] = (1 - DAMPING_FACTOR) / num_nodes + DAMPING_FACTOR * sum;
+        error[i] = (y[i] - x[i]) * (y[i] - x[i]);
+    }
+
+    __syncthreads();
+    // reduction error
+    int stride = 1;
+    while (stride < blockDim.x) {
+        int index = 2 * stride * i;
+        if (index < blockDim.x) {
+            error[index] += error[index + stride];
+        }
+        stride *= 2;
+        __syncthreads();
+    }
+    if (i == 0) {
+        error[0] = sqrt(error[0]);
     }
 }
+
+template <typename T>
+void PageRank_cpu(T* csrVal, unsigned long long* csrRowPtr, unsigned long long* csrColInd, double* x, double* y, double* error, unsigned long long num_nodes) {
+    for (int i = 0; i < num_nodes; i++) {
+        double sum = 0.0f;
+        for (int j = csrRowPtr[i]; j < csrRowPtr[i + 1]; j++) {
+            int col = csrColInd[j];
+            sum += x[col] * (double)csrVal[j];
+        }
+        y[i] = (1 - DAMPING_FACTOR) / num_nodes + DAMPING_FACTOR * sum;
+        error[i] = (y[i] - x[i]) * (y[i] - x[i]);
+    }
+}
+
 
 int main(int argc, char** argv) {
     std::string file_name = "web-Google.mtx";
@@ -163,14 +90,14 @@ int main(int argc, char** argv) {
 
     // Initialize host value
     CSRMatrix<int> matrix(file_name);
-    CSRMatrix<double> transition;
-    TransitionProb(matrix, transition);
     CSRMatrix<double> tmp;
-    transition.Transpose(tmp);
+    TransitionProb(matrix, tmp);
+    CSRMatrix<double> transition;
+    tmp.Transpose(transition);
 
     std::cout << "init end" << std::endl;
     // EFGMatrix efg();
-    int N = transition.VertexNum;
+    unsigned long long N = transition.VertexNum;
     double* x = (double*)malloc(N * sizeof(double));
     double* y = (double*)malloc(N * sizeof(double));
     double init = 1.0f / N;
@@ -210,19 +137,19 @@ int main(int argc, char** argv) {
 
     // Perform PageRank iterations
     int max_iterations = 1000;
-    double error = 1.0f;
+    double *error = (double*)malloc(N * sizeof(double));
+    error[0] = 1.0f;
+
+    double *d_error;
+    cudaMalloc((void**)&d_error, N * sizeof(double));
     
-    while (error > EPSILON && max_iterations > 0) {
-        pagerank_csr<double><<<(N + 255) / 256, 256>>>(d_Val, d_RowPtr, d_ColData, d_x, d_y, N);
-        cudaMemcpy(y, d_y, N * sizeof(double), cudaMemcpyDeviceToHost);
-        cudaMemcpy(x, d_x, N * sizeof(double), cudaMemcpyDeviceToHost);
-        error = 0.0f;
-        for (int i = 0; i < N; i++) {
-            error += std::abs(y[i] - x[i]);
-        }
+    while (error[0] > EPSILON && max_iterations > 0) {
+        pagerank_csr<double><<<(N + 255) / 256, 256>>>(d_Val, d_RowPtr, d_ColData, d_x, d_y,d_error, N);
+        cudaMemcpy(error, d_error,sizeof(double), cudaMemcpyDeviceToHost);
         std::swap(d_x, d_y);
         max_iterations--;
     }
+    cudaMemcpy(y, d_y, N * sizeof(double), cudaMemcpyDeviceToHost);
 
     // Free memory on the device
     cudaFree(d_RowPtr);
