@@ -6,17 +6,18 @@
 #include <vector>
 #include <algorithm>
 #include <bitset>
+#include <omp.h>
+#include <cusparse.h>
 
 #define DAMPING_FACTOR 0.85
 #define EPSILON 1e-6
 
-
-// suppose weight is integer
+// T is the type of the matrix's value
+template <typename T>
 struct CSRMatrix {
-    unsigned long long* csrVal;
+    T* csrVal;
     unsigned long long* csrRowPtr;
     unsigned long long* csrColInd;
-    unsigned long long MaxVal;
     unsigned long long EdgeNum;
     unsigned long long VertexNum;
 
@@ -31,8 +32,39 @@ struct CSRMatrix {
         free(csrColInd);
     }
 
-    // input file format: Matrix market format
-    void readFromFile(const std::string &fileName) {
+    void Transpose(CSRMatrix<T> &dst)
+    {
+        dst.VertexNum = VertexNum;
+        dst.EdgeNum = EdgeNum;
+        dst.csrVal = (T*)malloc(EdgeNum * sizeof(T));
+        dst.csrRowPtr = (unsigned long long*)malloc((VertexNum + 1) * sizeof(unsigned long long));
+        dst.csrColInd = (unsigned long long*)malloc(EdgeNum * sizeof(unsigned long long));
+        // cusparseHandle_t handle;
+        // cusparseCreate(&handle);
+
+        // void *buffer = NULL;
+        // unsigned long long *cscColPtr, *cscRowInd;
+        // T *cscVal;
+
+        // unsigned long long bufferSize = 0;
+        // cusparseCsr2cscEx2_bufferSize(handle, EdgeNum, EdgeNum, VertexNum, 
+        //                                 csrVal, csrRowPtr, csrColInd, dst.csrVal, dst.csrRowPtr, dst.csrColInd, 
+        //                                 CUDA_R_64F, CUSPARSE_ACTION_NUMERIC, CUSPARSE_INDEX_BASE_ZERO, CUSPARSE_CSR2CSC_ALG1, 
+        //                                 &bufferSize);
+        // buffer = malloc(bufferSize);
+
+        // cusparseCsr2cscEx2(handle, EdgeNum, EdgeNum, VertexNum,
+        //                 csrVal, csrRowPtr, csrColInd,
+        //                 dst.cscVal, dst.cscRowInd, dst.cscColPtr,
+        //                 CUDA_R_64F,
+        //                 CUSPARSE_ACTION_NUMERIC,
+        //                 CUSPARSE_INDEX_BASE_ZERO, buffer);
+
+        // cusparseDestroy(handle);
+    }
+
+    void readFromFile(const std::string &fileName)
+    {
         std::ifstream file(fileName);
         std::string line;
         unsigned long long numRows, numCols;
@@ -45,28 +77,47 @@ struct CSRMatrix {
         std::stringstream s(line);
         s >> numRows >> numCols >> EdgeNum;
         VertexNum = numRows;
-        csrRowPtr = (unsigned long long*)malloc((numRows + 1) * sizeof(unsigned long long));
-        csrVal = (unsigned long long*)malloc(EdgeNum * sizeof(unsigned long long));
+        csrVal = (T*)malloc(EdgeNum * sizeof(T));
+        csrRowPtr = (unsigned long long*)malloc((VertexNum + 1) * sizeof(unsigned long long));
         csrColInd = (unsigned long long*)malloc(EdgeNum * sizeof(unsigned long long));
-
-        unsigned long long row, col;
-        unsigned long long val;
-        for (int i = 0; i < EdgeNum; i++) {
-            file >> row >> col >> val;
-            row--;  // Convert to 0-based index
-            col--;
-            csrVal[i] = val;
-            MaxVal = std::max(MaxVal, val);
-            csrColInd[i] = col;
-            csrRowPtr[row + 1]++;
+        unsigned long long index = 0;
+        for (unsigned long long i = 0; i < EdgeNum; i++) {
+            file >> csrRowPtr[i] >> csrColInd[i] >> csrVal[i];
+            csrRowPtr[i]--;  // Convert to 0-based index
+            csrColInd[i]--;
         }
+        csrRowPtr[VertexNum] = EdgeNum;
+    }
 
-        // Compute row pointer array
-        for (unsigned long long i = 1; i <= numRows; i++) {
-            csrRowPtr[i] += csrRowPtr[i - 1];
-        }
+    void TransitionProb(CSRMatrix<double> &dst)
+    {
+
     }
 };
+
+void TransitionProb(CSRMatrix<int> &src, CSRMatrix<double> &dst)
+{
+    dst.VertexNum = src.VertexNum;
+    dst.EdgeNum = src.EdgeNum;
+    dst.csrVal = (double*)malloc(dst.EdgeNum * sizeof(double));
+    dst.csrRowPtr = (unsigned long long*)malloc((dst.VertexNum + 1) * sizeof(unsigned long long));
+    dst.csrColInd = (unsigned long long*)malloc(dst.EdgeNum * sizeof(unsigned long long));
+    dst.csrRowPtr[0] = 0;
+    for(unsigned long long i = 0; i < dst.VertexNum; i++)
+    {
+        unsigned long long sum = 0;
+        for(unsigned long long j = src.csrRowPtr[i]; j < src.csrRowPtr[i + 1]; j++)
+        {
+            sum += src.csrVal[j];
+        }
+        for(unsigned long long j = src.csrRowPtr[i]; j < src.csrRowPtr[i + 1]; j++)
+        {
+            dst.csrVal[j] = (double)src.csrVal[j] / sum;
+            dst.csrColInd[j] = src.csrColInd[j];
+        }
+        dst.csrRowPtr[i + 1] = src.csrRowPtr[i + 1];
+    }
+}
 
 // no stl
 struct EFGMatrix {
@@ -77,63 +128,23 @@ struct EFGMatrix {
     unsigned long long VertexNum;
 
     EFGMatrix() {};
-    EFGMatrix(const std::string &fileName) {
-        readFromFile(fileName);
-    }
 
     ~EFGMatrix() {
         free(data);
         free(vlist);
     }
-
-    // input file format: Matrix market format
-    void readFromFile(const std::string &fileName) {
-        std::ifstream file(fileName);
-        std::string line;
-        unsigned long long numRows, numCols;
-
-        // Skip header
-        do {
-            std::getline(file, line);
-        } while (line[0] == '%');
-
-        std::stringstream s(line);
-        s >> numRows >> numCols >> EdgeNum;
-        VertexNum = numRows;
-        data = (unsigned long long*)malloc(EdgeNum * sizeof(unsigned long long));
-        vlist = (unsigned long long*)malloc((numRows + 1) * sizeof(unsigned long long));
-
-        unsigned long long row, col;
-        unsigned long long val;
-        for (int i = 0; i < EdgeNum; i++) {
-            file >> row >> col >> val;
-            row--;  // Convert to 0-based index
-            col--;
-            data[i] = val;
-            MaxVal = std::max(MaxVal, val);
-            vlist[row + 1]++;
-        }
-
-        // Compute row pointer array
-        for (unsigned long long i = 1; i <= numRows; i++) {
-            vlist[i] += vlist[i - 1];
-        }
-    }
 };
 
-__global__ void pagerank(unsigned long long* csrVal, unsigned long long* csrRowPtr, unsigned long long* csrColInd, double* x, double* y, unsigned long long num_nodes) {
+template <typename T>
+__global__ void pagerank_csr(T* csrVal, unsigned long long* csrRowPtr, unsigned long long* csrColInd, double* x, double* y, unsigned long long num_nodes) {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i < num_nodes) {
         double sum = 0.0f;
-        unsigned long long num_neighbors = csrRowPtr[i + 1] - csrRowPtr[i];
         for (int j = csrRowPtr[i]; j < csrRowPtr[i + 1]; j++) {
             int col = csrColInd[j];
-            sum += x[col] / csrVal[j];
+            sum += x[col] * (double)csrVal[j];
         }
         y[i] = (1 - DAMPING_FACTOR) / num_nodes + DAMPING_FACTOR * sum;
-        if (num_neighbors == 0) {
-            y[i] += (1 - DAMPING_FACTOR) / num_nodes;
-        }
     }
 }
 
@@ -151,9 +162,15 @@ int main(int argc, char** argv) {
     }
 
     // Initialize host value
-    CSRMatrix csr(file_name);
-    EFGMatrix efg();
-    int N = csr.VertexNum;
+    CSRMatrix<int> matrix(file_name);
+    CSRMatrix<double> transition;
+    TransitionProb(matrix, transition);
+    CSRMatrix<double> tmp;
+    transition.Transpose(tmp);
+
+    std::cout << "init end" << std::endl;
+    // EFGMatrix efg();
+    int N = transition.VertexNum;
     double* x = (double*)malloc(N * sizeof(double));
     double* y = (double*)malloc(N * sizeof(double));
     double init = 1.0f / N;
@@ -163,19 +180,19 @@ int main(int argc, char** argv) {
     memset(y, 0, N * sizeof(double));
 
     // Initialize device value
-    unsigned long long* d_Val;
+    double* d_Val;
     unsigned long long* d_RowPtr;
     unsigned long long* d_ColData;
     double* d_x;
     double* d_y;
     if(method == 0)
     {
-        cudaMalloc((void**)&d_Val, csr.EdgeNum * sizeof(unsigned long long));
-        cudaMalloc((void**)&d_RowPtr, (csr.VertexNum + 1) * sizeof(unsigned long long));
-        cudaMalloc((void**)&d_ColData, csr.EdgeNum * sizeof(unsigned long long));
-        cudaMemcpy(d_Val, csr.csrVal, csr.EdgeNum * sizeof(unsigned long long), cudaMemcpyHostToDevice);
-        cudaMemcpy(d_RowPtr, csr.csrRowPtr, (csr.VertexNum + 1) * sizeof(unsigned long long), cudaMemcpyHostToDevice);
-        cudaMemcpy(d_ColData, csr.csrColInd, csr.EdgeNum * sizeof(unsigned long long), cudaMemcpyHostToDevice);
+        cudaMalloc((void**)&d_Val, transition.EdgeNum * sizeof(double));
+        cudaMalloc((void**)&d_RowPtr, (transition.VertexNum + 1) * sizeof(unsigned long long));
+        cudaMalloc((void**)&d_ColData, transition.EdgeNum * sizeof(unsigned long long));
+        cudaMemcpy(d_Val, transition.csrVal, transition.EdgeNum * sizeof(double), cudaMemcpyHostToDevice);
+        cudaMemcpy(d_RowPtr, transition.csrRowPtr, (transition.VertexNum + 1) * sizeof(unsigned long long), cudaMemcpyHostToDevice);
+        cudaMemcpy(d_ColData, transition.csrColInd, transition.EdgeNum * sizeof(unsigned long long), cudaMemcpyHostToDevice);
     }
     else
     {
@@ -194,63 +211,20 @@ int main(int argc, char** argv) {
     // Perform PageRank iterations
     int max_iterations = 1000;
     double error = 1.0f;
-    double* temp;
+    
     while (error > EPSILON && max_iterations > 0) {
-        pagerank<<<(N + 255) / 256, 256>>>(d_Val, d_RowPtr, d_ColData, d_x, d_y, N);
+        pagerank_csr<double><<<(N + 255) / 256, 256>>>(d_Val, d_RowPtr, d_ColData, d_x, d_y, N);
         cudaMemcpy(y, d_y, N * sizeof(double), cudaMemcpyDeviceToHost);
+        cudaMemcpy(x, d_x, N * sizeof(double), cudaMemcpyDeviceToHost);
         error = 0.0f;
         for (int i = 0; i < N; i++) {
             error += std::abs(y[i] - x[i]);
         }
-        std::swap(x, y);
+        std::swap(d_x, d_y);
         max_iterations--;
-    }
-
-    // CUP pagerank
-    double* c_x = (double*)malloc(N * sizeof(double));
-    double* c_y = (double*)malloc(N * sizeof(double));
-    for(int i = 0; i < N; i++) {
-        c_x[i] = init;
-    }
-    memset(c_y, 0, N * sizeof(double));
-    while (error > EPSILON && max_iterations > 0) {
-        for (int i = 0; i < N; i++) {
-            double sum = 0.0f;
-            unsigned long long num_neighbors = csr.csrRowPtr[i + 1] - csr.csrRowPtr[i];
-            for (int j = csr.csrRowPtr[i]; j < csr.csrRowPtr[i + 1]; j++) {
-                int col = csr.csrColInd[j];
-                sum += c_x[col] / csr.csrVal[j];
-            }
-            c_y[i] = (1 - DAMPING_FACTOR) / N + DAMPING_FACTOR * sum;
-            if (num_neighbors == 0) {
-                c_y[i] += (1 - DAMPING_FACTOR) / N;
-            }
-        }
-        error = 0.0f;
-        for (int i = 0; i < N; i++) {
-            error += std::abs(c_y[i] - c_x[i]);
-        }
-        std::swap(c_x, c_y);
-        max_iterations--;
-    }
-
-    unsigned long long i;
-    // verify result between GPU and CPU
-    for(i = 0; i < N; i ++)
-    {
-        if(std::abs(c_y[i] - y[i]) > 1e-4)
-        {
-            std::cout << "error in " << i << " " << c_y[i] << " " << y[i] << std::endl;
-            break;
-        }
-    }
-    if(i == N)
-    {
-        std::cout << "verify success" << std::endl;
     }
 
     // Free memory on the device
-    cudaFree(d_Val);
     cudaFree(d_RowPtr);
     cudaFree(d_ColData);
     cudaFree(d_x);
