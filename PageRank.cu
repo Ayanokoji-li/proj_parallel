@@ -19,7 +19,6 @@
 static const char ZERO[INTBITS] = {0};
 
 // no stl
-template <uint64_t Max>
 struct EFGMatrix {
     double* efgVal;
     uint64_t* efgRowPtr;
@@ -93,6 +92,56 @@ struct EFGMatrix {
         free(efgHighBits);
     }
 };
+
+struct cuEFGMatrix
+{
+    double* d_efgVal;
+    uint64_t* d_efgRowPtr;
+    void* d_efgLowBits;
+    int* d_efgLowBitsNum;
+    void* d_efgHighBits;
+    int* d_efghighBitsNum;
+    uint64_t d_EdgeNum;
+    uint64_t d_VertexNum;
+
+    cuEFGMatrix(EFGMatrix &efg) 
+    {
+        cudaMalloc((void**)&d_efgVal, efg.EdgeNum * sizeof(double));
+        cudaMalloc((void**)&d_efgRowPtr, (efg.VertexNum + 1) * sizeof(uint64_t));
+        cudaMemcpy(d_efgVal, efg.efgVal, efg.EdgeNum * sizeof(double), cudaMemcpyHostToDevice);
+        cudaMemcpy(d_efgRowPtr, efg.efgRowPtr, (efg.VertexNum + 1) * sizeof(uint64_t), cudaMemcpyHostToDevice);
+        int efgLowBitsNum[efg.VertexNum];
+        int efghighBitsNum[efg.VertexNum];
+
+        //do prefix sum of efgLowBitsNum
+        for(int i = 0; i < efg.VertexNum; i++) {
+            if(i == 0)
+            {
+                efgLowBitsNum[i] = efg.efgLowBitsNum[i] * (efg.efgRowPtr[i+1] - efg.efgRowPtr[i]);
+                efghighBitsNum[i] = efg.efghighBitsNum[i];
+            }
+            else
+            {
+                efgLowBitsNum[i] = efg.efgLowBitsNum[i] * (efg.efgRowPtr[i+1] - efg.efgRowPtr[i]) + efgLowBitsNum[i-1];
+                efghighBitsNum[i] = efg.efghighBitsNum[i] + efghighBitsNum[i-1];
+            }
+        }
+        cudaMalloc((void**)&d_efgLowBits, efgLowBitsNum[efg.VertexNum-1] * sizeof(void*));
+        
+        
+
+    }
+
+    ~cuEFGMatrix() {
+        cudaFree(efgVal);
+        cudaFree(efgRowPtr);
+        cudaFree(efgLowBits);
+        cudaFree(efgLowBitsNum);
+        cudaFree(efgHighBits);
+        cudaFree(efghighBitsNum);
+    }
+};
+}
 
 template <typename T>
 __global__ void pagerank_csr(T* csrVal, uint64_t* csrRowPtr, uint64_t* csrColInd, double* x, double* y, double* error, uint64_t num_nodes) {
