@@ -4,9 +4,9 @@
 #include <sstream>
 #include <string>
 #include <vector>
-#include <csr.h>
+#include "csr.h"
 
-class csr_for_pg : public CSR
+class CSR_for_pg : public CSR
 {
 private:
     std::vector<double> csrVal;
@@ -47,8 +47,37 @@ private:
     }
 
 public:   
-    csr_for_pg(std::string fileName) : CSR()
+    CSR_for_pg(std::string fileName) : CSR()
     {
         read_mtx(fileName);
+    }
+
+    void transpose()
+    {
+        std::vector<uint64_t> vlist_t(num_vertices_ + 1, 0);
+        std::vector<uint64_t> elist_t(num_edges_);
+        std::vector<double> csrVal_t(num_edges_);
+
+        for (unsigned long long i = 0; i < num_vertices_; i++) {
+            for (unsigned long long j = vlist_[i]; j < vlist_[i + 1]; j++) {
+                vlist_t[elist_[j] + 1]++;
+            }
+        }
+
+        for (unsigned long long i = 1; i <= num_vertices_; i++) {
+            vlist_t[i] += vlist_t[i - 1];
+        }
+
+        for (unsigned long long i = 0; i < num_vertices_; i++) {
+            for (unsigned long long j = vlist_[i]; j < vlist_[i + 1]; j++) {
+                unsigned long long k = vlist_t[elist_[j]]++;
+                elist_t[k] = i;
+                csrVal_t[k] = csrVal[j];
+            }
+        }
+
+        vlist_ = vlist_t;
+        elist_ = elist_t;
+        csrVal = csrVal_t;
     }
 };

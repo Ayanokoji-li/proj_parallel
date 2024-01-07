@@ -8,8 +8,10 @@ template <size_t kSkipQuantum, size_t kForwardQuantum>
 class CUEFGraph_ForPG;
 
 template <size_t kSkipQuantum, size_t kForwardQuantum>
-class EFGraph_ForPG : public EFGraph
+class EFGraph_ForPG : public EFGraph<kSkipQuantum, kForwardQuantum>
 {
+    friend class CUEFGraph_ForPG<kSkipQuantum, kForwardQuantum>;
+
     std::vector<double> efgVal;
 
 public:

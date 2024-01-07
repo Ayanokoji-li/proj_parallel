@@ -22,6 +22,7 @@ CUDA_LINK_LIBS= -lcudart
 MKDIR_P = mkdir -p
 # Final binary
 BIN = ef_bfs 
+TEST_BIN = test
 # Put all auto generated stuff to this build dir.
 SRC_DIR = ./src
 BUILD_DIR = ./build
