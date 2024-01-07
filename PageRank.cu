@@ -13,27 +13,89 @@
 #define DAMPING_FACTOR 0.85
 #define EPSILON 1e-6
 
-// no stl
-template <typename T>
-struct EFGMatrix {
-    T* efgVal;
-    unsigned long long* efgRowPtr;
-    std::bitset* efgLowBits;
-    int* efgLowBitsNum;
-    std::bitset* efgHighBits;
-    unsigned long long EdgeNum;
-    unsigned long long VertexNum;
+#define INTBITS 32
+#define GET_LOW_BIT(x, n) ((x) & ((1 << (n)) - 1))
+#define GET_HIGH_BIT(x, n) ((x) >> (n))
+static const char ZERO[INTBITS] = {0};
 
-    EFGMatrix() {};
+// no stl
+template <uint64_t Max>
+struct EFGMatrix {
+    double* efgVal;
+    uint64_t* efgRowPtr;
+    void** efgLowBits;
+    int* efgLowBitsNum;
+    void** efgHighBits;
+    int* efghighBitsNum;
+    uint64_t EdgeNum;
+    uint64_t VertexNum;
+
+    EFGMatrix(CSRMatrix &csr) 
+    {
+        malloc(efgVal, csr.EdgeNum * sizeof(double));
+        malloc(efgRowPtr, (csr.VertexNum + 1) * sizeof(uint64_t));
+        memcpy(efgVal, csr.csrVal, csr.EdgeNum * sizeof(double));
+        memcpy(efgRowPtr, csr.csrRowPtr, (csr.VertexNum + 1) * sizeof(uint64_t));
+        EdgeNum = csr.EdgeNum;
+        VertexNum = csr.VertexNum;
+        efgLowBits = (void**)malloc((VertexNum + 1) * sizeof(void*));
+        efgLowBitsNum = (int*)malloc((VertexNum) * sizeof(int)); // low bit num per neighbors
+        efgHighBits = (void**)malloc((VertexNum + 1) * sizeof(void*));
+        efgHighBitsNum = (int*)malloc((VertexNum) * sizeof(int)); // high bit num total
+        for(uint64_t i = 0; i < VertexNum + 1; i++) {
+            if(auto num_neighbors = efgRowPtr[i+1] - efgRowPtr[i]; num_neighbors != 0)
+            {
+                efgLowBitsNum[i] = std::floor(std::log2(csr.csrColInd[efgRowPtr[i+1]-1]));
+                if(efgLowBitsNum[i] < 0) {
+                    efgLowBitsNum[i] = 0;
+                }
+                else
+                {
+                    if(efgLowBitsNum[i] % 2 != 0) {
+                        efgLowBitsNum[i] = (efgLowBitsNum[i] / 2 + 1) * 2;
+                    }
+                }
+                efgLowBits[i] = malloc((num_neighbors * efgLowBitsNum[i] - 1) / 8 + 1);
+
+                efgHighBitsNum[i] = csr.csrColInd[efgRowPtr[i+1]-1] >> efgLowBitsNum[i] + num_neighbors;
+                if(efgHighBitsNum[i] < 0) {
+                    efgHighBitsNum[i] = 0;
+                }
+                else
+                {
+                    if(efghighBitsNum % 4 != 0) {
+                        efghighBitsNum = (efghighBitsNum / 4 + 1) * 4;
+                    }
+                }
+                efgHighBits[i] = malloc((efgHighBitsNum[i]-1) / 8 + 1);
+                memset(efgLowBits[i], 0, (efgLowBitsNum[i] - 1) / 8 + 1);
+                uint64_t prevHighBits = 0;
+                uint64_t pos = 0;
+                for(auto j = efgRowPtr[i]; j < efgRowPtr[i+1]; j++) {
+                    auto num = j - efgRowPtr[i];
+                    uint64_t lowBits = GET_LOW_BIT(csr.csrColInd[j], efgLowBitsNum[i]);
+                    efgLowBits[i + num* efgLowBitsNum[i]/8] ^= lowBits << (8 - num * efgLowBitsNum[i] % 8);
+                    uint64_t highBits = GET_HIGH_BIT(csr.csrColInd[j], efgLowBitsNum[i]);
+                    uint64_t diff = highBits - prevHighBits;
+                    prevHighBits = highBits;
+                    pos += diff + 1;
+                    efgHighBits[i + pos/8] ^= 1 << (8 - pos % 8);
+                }
+            }
+        }
+    };
 
     ~EFGMatrix() {
-        free(data);
-        free(vlist);
+        free(efgVal);
+        free(efgRowPtr);
+        free(efgLowBits);
+        free(efgLowBitsNum);
+        free(efgHighBits);
     }
 };
 
 template <typename T>
-__global__ void pagerank_csr(T* csrVal, unsigned long long* csrRowPtr, unsigned long long* csrColInd, double* x, double* y, double* error, unsigned long long num_nodes) {
+__global__ void pagerank_csr(T* csrVal, uint64_t* csrRowPtr, uint64_t* csrColInd, double* x, double* y, double* error, uint64_t num_nodes) {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i < num_nodes) {
         double sum = 0.0f;
@@ -62,7 +124,7 @@ __global__ void pagerank_csr(T* csrVal, unsigned long long* csrRowPtr, unsigned 
 }
 
 template <typename T>
-void PageRank_cpu(T* csrVal, unsigned long long* csrRowPtr, unsigned long long* csrColInd, double* x, double* y, double* error, unsigned long long num_nodes) {
+void PageRank_cpu(T* csrVal, uint64_t* csrRowPtr, uint64_t* csrColInd, double* x, double* y, double* error, uint64_t num_nodes) {
     for (int i = 0; i < num_nodes; i++) {
         double sum = 0.0f;
         for (int j = csrRowPtr[i]; j < csrRowPtr[i + 1]; j++) {
@@ -89,15 +151,13 @@ int main(int argc, char** argv) {
     }
 
     // Initialize host value
-    CSRMatrix<int> matrix(file_name);
-    CSRMatrix<double> tmp;
-    TransitionProb(matrix, tmp);
-    CSRMatrix<double> transition;
-    tmp.Transpose(transition);
+    CSRMatrix matrix(file_name);
+    CSRMatrix transition{};
+    TransitionProb(matrix, transition);
 
     std::cout << "init end" << std::endl;
     // EFGMatrix efg();
-    unsigned long long N = transition.VertexNum;
+    uint64_t N = transition.VertexNum;
     double* x = (double*)malloc(N * sizeof(double));
     double* y = (double*)malloc(N * sizeof(double));
     double init = 1.0f / N;
@@ -108,27 +168,27 @@ int main(int argc, char** argv) {
 
     // Initialize device value
     double* d_Val;
-    unsigned long long* d_RowPtr;
-    unsigned long long* d_ColData;
+    uint64_t* d_RowPtr;
+    uint64_t* d_ColData;
     double* d_x;
     double* d_y;
     if(method == 0)
     {
         cudaMalloc((void**)&d_Val, transition.EdgeNum * sizeof(double));
-        cudaMalloc((void**)&d_RowPtr, (transition.VertexNum + 1) * sizeof(unsigned long long));
-        cudaMalloc((void**)&d_ColData, transition.EdgeNum * sizeof(unsigned long long));
+        cudaMalloc((void**)&d_RowPtr, (transition.VertexNum + 1) * sizeof(uint64_t));
+        cudaMalloc((void**)&d_ColData, transition.EdgeNum * sizeof(uint64_t));
         cudaMemcpy(d_Val, transition.csrVal, transition.EdgeNum * sizeof(double), cudaMemcpyHostToDevice);
-        cudaMemcpy(d_RowPtr, transition.csrRowPtr, (transition.VertexNum + 1) * sizeof(unsigned long long), cudaMemcpyHostToDevice);
-        cudaMemcpy(d_ColData, transition.csrColInd, transition.EdgeNum * sizeof(unsigned long long), cudaMemcpyHostToDevice);
+        cudaMemcpy(d_RowPtr, transition.csrRowPtr, (transition.VertexNum + 1) * sizeof(uint64_t), cudaMemcpyHostToDevice);
+        cudaMemcpy(d_ColData, transition.csrColInd, transition.EdgeNum * sizeof(uint64_t), cudaMemcpyHostToDevice);
     }
     else
     {
-        // cudaMalloc((void**)&d_Val, efg.data.size() * sizeof(unsigned long long));
-        // cudaMalloc((void**)&d_RowPtr, (efg.vlist.size()) * sizeof(unsigned long long));
-        // cudaMalloc((void**)&d_ColData, efg.data.size() * sizeof(unsigned long long));
-        // cudaMemcpy(d_Val, efg.data, efg.data.size() * sizeof(unsigned long long), cudaMemcpyHostToDevice);
-        // cudaMemcpy(d_RowPtr, efg.vlist, (efg.vlist.size()) * sizeof(unsigned long long), cudaMemcpyHostToDevice);
-        // cudaMemcpy(d_ColData, efg.data, efg.data.size() * sizeof(unsigned long long), cudaMemcpyHostToDevice);
+        // cudaMalloc((void**)&d_Val, efg.data.size() * sizeof(uint64_t));
+        // cudaMalloc((void**)&d_RowPtr, (efg.vlist.size()) * sizeof(uint64_t));
+        // cudaMalloc((void**)&d_ColData, efg.data.size() * sizeof(uint64_t));
+        // cudaMemcpy(d_Val, efg.data, efg.data.size() * sizeof(uint64_t), cudaMemcpyHostToDevice);
+        // cudaMemcpy(d_RowPtr, efg.vlist, (efg.vlist.size()) * sizeof(uint64_t), cudaMemcpyHostToDevice);
+        // cudaMemcpy(d_ColData, efg.data, efg.data.size() * sizeof(uint64_t), cudaMemcpyHostToDevice);
     }
     cudaMalloc((void**)&d_x, N * sizeof(double));
     cudaMalloc((void**)&d_y, N * sizeof(double));

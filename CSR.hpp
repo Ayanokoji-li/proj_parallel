@@ -8,32 +8,31 @@
 #include <algorithm>
 #include <omp.h>
 
-template <typename T>
-using COO = std::vector<std::tuple<unsigned long long, unsigned long long, T>>;
 
-template <typename T>
+using COO = std::vector<std::tuple<uint64_t, uint64_t, double>>;
+
 struct comp_1 {
-    bool operator()(const std::tuple<unsigned long long, unsigned long long, T> &a, const std::tuple<unsigned long long, unsigned long long, T> &b) {
+    bool operator()(const std::tuple<uint64_t, uint64_t, double> &a, const std::tuple<uint64_t, uint64_t, double> &b) {
         return std::get<0>(a) < std::get<0>(b);
     }
 };
 
-template <typename T>
+
 struct comp_2 {
-    bool operator()(const std::tuple<unsigned long long, unsigned long long, T> &a, const std::tuple<unsigned long long, unsigned long long, T> &b) {
+    bool operator()(const std::tuple<uint64_t, uint64_t, double> &a, const std::tuple<uint64_t, uint64_t, double> &b) {
         return std::get<1>(a) < std::get<1>(b);
     }
 };
 
 
-// T is the type of the matrix's value
-template <typename T>
+// double is the type of the matrix's value
+
 struct CSRMatrix {
-    T* csrVal;
-    unsigned long long* csrRowPtr;
-    unsigned long long* csrColInd;
-    unsigned long long EdgeNum;
-    unsigned long long VertexNum;
+    double* csrVal;
+    uint64_t* csrRowPtr;
+    uint64_t* csrColInd;
+    uint64_t EdgeNum;
+    uint64_t VertexNum;
 
     CSRMatrix() {};
     CSRMatrix(const std::string &fileName) {
@@ -46,35 +45,35 @@ struct CSRMatrix {
         free(csrColInd);
     }
 
-    void Transpose(CSRMatrix<T> &dst)
+    void Transpose(CSRMatrix &dst)
     {
         dst.VertexNum = VertexNum;
         dst.EdgeNum = EdgeNum;
-        dst.csrVal = (T*)malloc(EdgeNum * sizeof(T));
-        dst.csrRowPtr = (unsigned long long*)malloc((VertexNum + 1) * sizeof(unsigned long long));
-        dst.csrColInd = (unsigned long long*)malloc(EdgeNum * sizeof(unsigned long long));
+        dst.csrVal = (double*)malloc(EdgeNum * sizeof(double));
+        dst.csrRowPtr = (uint64_t*)malloc((VertexNum + 1) * sizeof(uint64_t));
+        dst.csrColInd = (uint64_t*)malloc(EdgeNum * sizeof(uint64_t));
 
         // col_index, row_index
-        COO<T> coo(EdgeNum);
+        COO coo(EdgeNum);
         #pragma omp parallel for
-        for(unsigned long long i = 0; i < VertexNum; i++)
+        for(uint64_t i = 0; i < VertexNum; i++)
         {
-            for(unsigned long long j = csrRowPtr[i]; j < csrRowPtr[i + 1]; j++)
+            for(uint64_t j = csrRowPtr[i]; j < csrRowPtr[i + 1]; j++)
             {
                 coo[j] = std::make_tuple(csrColInd[j], i, csrVal[j]);
             }
         }
-        std::stable_sort(coo.begin(), coo.end(), comp_2<T>());
-        std::stable_sort(coo.begin(), coo.end(), comp_1<T>());
+        std::stable_sort(coo.begin(), coo.end(), comp_2());
+        std::stable_sort(coo.begin(), coo.end(), comp_1());
 
         dst.csrRowPtr[0] = 0;
-        for(unsigned long long i = 0; i < EdgeNum; i++)
+        for(uint64_t i = 0; i < EdgeNum; i++)
         {
             dst.csrVal[i] = std::get<2>(coo[i]);
             dst.csrColInd[i] = std::get<1>(coo[i]);
             dst.csrRowPtr[std::get<0>(coo[i]) + 1]++;
         }
-        for(unsigned long long i = 1; i <= VertexNum; i++)
+        for(uint64_t i = 1; i <= VertexNum; i++)
         {
             dst.csrRowPtr[i] += dst.csrRowPtr[i - 1];
         }
@@ -84,7 +83,7 @@ struct CSRMatrix {
     {
         std::ifstream file(fileName);
         std::string line;
-        unsigned long long numRows, numCols;
+        uint64_t numRows, numCols;
 
         // Skip header
         do {
@@ -94,13 +93,13 @@ struct CSRMatrix {
         std::stringstream s(line);
         s >> numRows >> numCols >> EdgeNum;
         VertexNum = numRows;
-        csrRowPtr = (unsigned long long*)malloc((numRows + 1) * sizeof(unsigned long long));
-        csrVal = (T*)malloc(EdgeNum * sizeof(T));
-        csrColInd = (unsigned long long*)malloc(EdgeNum * sizeof(unsigned long long));
+        csrRowPtr = (uint64_t*)malloc((numRows + 1) * sizeof(uint64_t));
+        csrVal = (double*)malloc(EdgeNum * sizeof(double));
+        csrColInd = (uint64_t*)malloc(EdgeNum * sizeof(uint64_t));
 
-        unsigned long long row, col;
-        unsigned long long val;
-        for (unsigned long long i = 0; i < EdgeNum; i++) {
+        uint64_t row, col;
+        uint64_t val;
+        for (uint64_t i = 0; i < EdgeNum; i++) {
             file >> row >> col >> val;
             row--;  // Convert to 0-based index
             col--;
@@ -110,40 +109,38 @@ struct CSRMatrix {
         }
 
         // Compute row pointer array
-        for (unsigned long long i = 1; i <= numRows; i++) {
+        for (uint64_t i = 1; i <= numRows; i++) {
             csrRowPtr[i] += csrRowPtr[i - 1];
         }
     }
-
-    void TransitionProb(CSRMatrix<double> &dst)
-    {
-        TransitionProb(*this, dst);
-    }
 };
 
-template <typename T>
-void TransitionProb(CSRMatrix<T> &src, CSRMatrix<double> &dst)
+
+void TransitionProb(CSRMatrix &src, CSRMatrix &dst)
 {
-    dst.VertexNum = src.VertexNum;
-    dst.EdgeNum = src.EdgeNum;
-    dst.csrVal = (double*)malloc(dst.EdgeNum * sizeof(double));
-    dst.csrRowPtr = (unsigned long long*)malloc((dst.VertexNum + 1) * sizeof(unsigned long long));
-    dst.csrColInd = (unsigned long long*)malloc(dst.EdgeNum * sizeof(unsigned long long));
-    dst.csrRowPtr[0] = 0;
-    for(unsigned long long i = 0; i < dst.VertexNum; i++)
+    CSRMatrix tmp;
+    tmp.VertexNum = src.VertexNum;
+    tmp.EdgeNum = src.EdgeNum;
+    tmp.csrVal = (double*)malloc(tmp.EdgeNum * sizeof(double));
+    tmp.csrRowPtr = (uint64_t*)malloc((tmp.VertexNum + 1) * sizeof(uint64_t));
+    tmp.csrColInd = (uint64_t*)malloc(tmp.EdgeNum * sizeof(uint64_t));
+    tmp.csrRowPtr[0] = 0;
+    #pragma omp parallel for
+    for(uint64_t i = 0; i < tmp.VertexNum; i++)
     {
-        T sum = 0;
-        for(unsigned long long j = src.csrRowPtr[i]; j < src.csrRowPtr[i + 1]; j++)
+        double sum = 0;
+        for(uint64_t j = src.csrRowPtr[i]; j < src.csrRowPtr[i + 1]; j++)
         {
             sum += src.csrVal[j];
         }
-        for(unsigned long long j = src.csrRowPtr[i]; j < src.csrRowPtr[i + 1]; j++)
+        for(uint64_t j = src.csrRowPtr[i]; j < src.csrRowPtr[i + 1]; j++)
         {
-            dst.csrVal[j] = (double)src.csrVal[j] / sum;
-            dst.csrColInd[j] = src.csrColInd[j];
+            tmp.csrVal[j] = (double)src.csrVal[j] / sum;
+            tmp.csrColInd[j] = src.csrColInd[j];
         }
-        dst.csrRowPtr[i + 1] = src.csrRowPtr[i + 1];
+        tmp.csrRowPtr[i + 1] = src.csrRowPtr[i + 1];
     }
+    tmp.Transpose(dst);
 }
 
 #endif
