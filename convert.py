@@ -11,6 +11,6 @@ def convert_to_matrix_market(input_file, output_file):
     matrix = coo_matrix((values, (rows, cols)))
     mmwrite(output_file, matrix)
 # 'com-orkut', 'roadNet-CA', 'web-Stanford', 'soc-LiveJournal1', 
-file_name = ["web-Google"]
+file_name = ["SpMat2"]
 for i in file_name:
     convert_to_matrix_market(i + '.txt', i + '.mtx')
