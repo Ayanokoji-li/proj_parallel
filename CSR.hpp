@@ -4,10 +4,15 @@
 #include <vector>
 #include <fstream>
 #include <sstream>
+#include <iostream>
 #include <string>
 #include <algorithm>
 #include <omp.h>
+#include "PageRank.hpp"
+#include "cuda_function.hpp"
 
+#define EPSILON 1e-6
+#define GET_GTEPS(time, edge) (edge / ((time) * 1e9))
 
 using COO = std::vector<std::tuple<uint64_t, uint64_t, double>>;
 
@@ -24,6 +29,37 @@ struct comp_2 {
     }
 };
 
+void prefix_sum(uint64_t *x, uint64_t N)
+{
+    uint64_t *suma;
+    #pragma omp parallel
+    {
+        const int ithread = omp_get_thread_num();
+        const int nthreads = omp_get_num_threads();
+        #pragma omp single
+        {
+            suma = new uint64_t[nthreads+1];
+            suma[0] = 0;
+        }
+        uint64_t sum = 0;
+        #pragma omp for schedule(static)
+        for (int i=0; i<N; i++) {
+            sum += x[i];
+            x[i] = sum;
+        }
+        suma[ithread+1] = sum;
+        #pragma omp barrier
+        float offset = 0;
+        for(int i=0; i<(ithread+1); i++) {
+            offset += suma[i];
+        }
+        #pragma omp for schedule(static)
+        for (int i=0; i<N; i++) {
+            x[i] += offset;
+        }
+    }
+    delete[] suma;
+}
 
 // double is the type of the matrix's value
 
@@ -57,6 +93,8 @@ struct CSRMatrix {
 
     void Transpose(CSRMatrix &dst)
     {
+        auto start = omp_get_wtime();
+        std::cout << "Transpose start" << std::endl;
         dst.VertexNum = VertexNum;
         dst.EdgeNum = EdgeNum;
         dst.csrVal = (double*)malloc(EdgeNum * sizeof(double));
@@ -66,41 +104,19 @@ struct CSRMatrix {
         memset(dst.csrColInd, 0, (VertexNum + 1) * sizeof(double));
 
         // col_index, row_index
-        COO coo(EdgeNum);
-        std::vector<uint64_t> col_num(VertexNum, 0);
         #pragma omp parallel for
         for(uint64_t i = 0; i < VertexNum; i++)
         {
             for(uint64_t j = csrRowPtr[i]; j < csrRowPtr[i + 1]; j++)
             {
-                coo[j] = std::make_tuple(csrColInd[j], i, csrVal[j]);
                 #pragma omp atomic
-                col_num[csrColInd[j]]++;
+                dst.csrRowPtr[csrColInd[j]+1]++;
             }
-        }
-        
-        // prefix sum of col_num with omp
-        uint64_t stride = 1;
-        while(stride < VertexNum)
-        {
-            #pragma omp parallel for
-            for(uint64_t i = stride; i < VertexNum; i += stride * 2)
-            {
-                col_num[i] += col_num[i - stride];
-            }
-            stride *= 2;
-        }
-        stride = (VertexNum) / 2;
-        while (stride > 0)
-        {
-            #pragma omp parallel for
-            for(uint64_t i = stride; i < VertexNum; i += stride * 2)
-            {
-                col_num[i + stride] += col_num[i];
-            }
-            stride /= 2;
         }
 
+        prefix_sum(dst.csrRowPtr, VertexNum + 1);
+        uint64_t* col_num = (uint64_t*)malloc(VertexNum * sizeof(uint64_t));
+        memcpy(col_num, dst.csrRowPtr, VertexNum * sizeof(uint64_t));
         #pragma omp parallel for
         for(uint64_t i = 0; i < VertexNum; i++)
         {
@@ -116,27 +132,6 @@ struct CSRMatrix {
             }
         }
 
-        // std::stable_sort(coo.begin(), coo.end(), comp_1());
-
-        // std::vector<uint64_t> row_num(VertexNum+1, 0);
-        // std::vector<uint64_t> row_num_tmp(VertexNum+1, 0);
-        // #pragma omp parallel for
-        // for(uint64_t i = 0; i < EdgeNum; i++)
-        // {
-        //     row_num[std::get<0>(coo[i]) + 1]++;
-        // }
-
-        // dst.csrRowPtr[0] = 0;
-        // for(uint64_t i = 0; i < EdgeNum; i++)
-        // {
-        //     dst.csrVal[i] = std::get<2>(coo[i]);
-        //     dst.csrColInd[i] = std::get<1>(coo[i]);
-        //     dst.csrRowPtr[std::get<0>(coo[i]) + 1]++;
-        // }
-        // for(uint64_t i = 1; i <= VertexNum; i++)
-        // {
-        //     dst.csrRowPtr[i] += dst.csrRowPtr[i - 1];
-        // }
         auto end = omp_get_wtime();
         std::cout << "Transpose speed: " << GET_GTEPS(end-start, EdgeNum) << " GTEPS" << std::endl;
         std::cout << "Transpose time " << end-start << " s" << std::endl;
@@ -145,8 +140,12 @@ struct CSRMatrix {
     void readFromFile(const std::string &fileName)
     {
         std::ifstream file(fileName);
+        if(!file.is_open())
+        {
+            std::cout << "File not found" << std::endl;
+            exit(0);
+        }
         std::string line;
-        uint64_t numRows, numCols;
 
         auto start = omp_get_wtime();
         std::cout << "Read file start" << std::endl;
@@ -156,12 +155,10 @@ struct CSRMatrix {
         } while (line[0] == '%');
 
         std::stringstream s(line);
-        s >> numRows >> numCols >> EdgeNum;
-        VertexNum = numRows;
-        csrRowPtr = (uint64_t*)malloc((numRows + 1) * sizeof(uint64_t));
+        s >> VertexNum >> VertexNum >> EdgeNum;
+        csrRowPtr = (uint64_t*)malloc((VertexNum + 1) * sizeof(uint64_t));
         csrVal = (double*)malloc(EdgeNum * sizeof(double));
         csrColInd = (uint64_t*)malloc(EdgeNum * sizeof(uint64_t));
-
         uint64_t row, col;
         uint64_t val;
         for (uint64_t i = 0; i < EdgeNum; i++) {
@@ -173,30 +170,7 @@ struct CSRMatrix {
             csrRowPtr[row + 1]++;
         }
 
-        // Compute prefix sum of csrRowPtr with csrRowPtr[0] = 0
-        // uint64_t stride = 1;
-        // while(stride < numRows)
-        // {
-        //     #pragma omp parallel for
-        //     for(uint64_t i = stride; i <= numRows; i += stride * 2)
-        //     {
-        //         csrRowPtr[i] += csrRowPtr[i - stride];
-        //     }
-        //     stride *= 2;
-        // }
-        // stride = (numRows + 1) / 2;
-        // while (stride > 0)
-        // {
-        //     #pragma omp parallel for
-        //     for(uint64_t i = stride; i <= numRows; i += stride * 2)
-        //     {
-        //         csrRowPtr[i + stride] += csrRowPtr[i];
-        //     }
-        //     stride /= 2;
-        // }
-
-
-        for(uint64_t i = 1; i <= numRows; i++) 
+        for(uint64_t i = 1; i <= VertexNum; i++) 
         {
             csrRowPtr[i] += csrRowPtr[i - 1];
         }
@@ -255,7 +229,13 @@ struct CSRMatrix {
                     PageRank_cuda_csr<<<(N + 255) / 256, 256>>>(d_Val, d_RowPtr, d_ColData, d_x, d_y,d_error, N, damping);
                 else
                     PageRank_cuda_csc<<<(N + 255) / 256, 256>>>(d_Val, d_RowPtr, d_ColData, d_x, d_y, d_error, N, damping);
-                cudaMemcpy(error, d_error,sizeof(double), cudaMemcpyDeviceToHost);
+                cudaDeviceSynchronize();
+                // deviceReduce(d_error, d_error, N);
+                cudaMemcpy(error, d_error,sizeof(double) * EdgeNum, cudaMemcpyDeviceToHost);
+                for(int i = 0; i < N; i++)
+                {
+                    error[0] += error[i];
+                }
                 std::swap(d_x, d_y);
             }
             else
@@ -263,16 +243,13 @@ struct CSRMatrix {
                 PageRank_cpu_csr(csrVal, csrRowPtr, csrColInd, x, res, error, N);
                 std::swap(x, res);
             }
+            std::cout << "error = " << error[0] << std::endl;
             iterations++;
         }
 
         if(com_tpye == COM_TYPE::GPU)
         {
             cudaMemcpy(res, d_x, N * sizeof(double), cudaMemcpyDeviceToHost);
-            for(auto i = 0; i < 20; i++)
-            {
-                std::cout << res[i] << std::endl;
-            }
         }
         else
         {

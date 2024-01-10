@@ -7,22 +7,9 @@
 #include <algorithm>
 #include <omp.h>
 #include <stdio.h>
+#include "cuda_function.hpp"
 #define DAMPING_FACTOR 0.85
 #define BLOCKSIZE_LIM 256
-
-#if !defined(__CUDA_ARCH__) || __CUDA_ARCH__ >= 600 
-
-#else 
-
-   __device__ double atomicAdd(double* a, double b) 
-
-   { 
-
-      return b; 
-
-   } 
-
-#endif
 
 enum class MATRIX_TYPE {
     CSR,
@@ -42,25 +29,9 @@ __global__ void PageRank_cuda_csr(double* csrVal, uint64_t* csrRowPtr, uint64_t*
             auto col = csrColInd[j];
             sum += x[col] * (double)csrVal[j];
         }
-        y[i] = (1 - damping_factor) / num_nodes + damping_factor * sum;
-        error[i] = (y[i] - x[i]) * (y[i] - x[i]);
-        atomicAdd(&error[0], error[i]);
-    }
-
-    __syncthreads();
-    // reduction error
-    // int stride = 1;
-    // while (stride < num_nodes) {
-    //     int index = 2 * stride * i;
-    //     if (index < num_nodes) {
-    //         error[index] += error[index - stride];
-    //     }
-    //     stride *= 2;
-    //     __syncthreads();
-    // }
-
-    if (i == 0) {
-        error[0] = sqrt(error[0]);
+        double tmp = (1 - damping_factor) / num_nodes + damping_factor * sum;
+        y[i] = tmp;
+        error[i] = (tmp - x[i]);
     }
 }
 
@@ -73,13 +44,22 @@ __global__ void PageRank_cuda_csc(double *cscVal, uint64_t *cscColPtr, uint64_t 
         {
             auto row = cscRowInd[j];
             double tmp = x[row] * cscVal[j];
-            y[row] += tmp;
-            printf("y[%d] = %e\n", row, y[row]);
+            atomicadd(y+row, tmp);
         }
         __syncthreads();
         y[i] = (1 - damping_factor) / num_nodes + damping_factor * y[i];
-        printf("y[%d] = %e\n", i, y[i]);
         error[i] = (y[i] - x[i]) * (y[i] - x[i]);
+    }
+
+    __syncthreads();
+
+    if(i < num_nodes && i != 0)
+    {
+        atomicadd(error, error[i]);
+    }
+    else if(i == 0)
+    {
+        error[0] = sqrt(error[0]);
     }
 }
 
@@ -101,33 +81,6 @@ void PageRank_cpu_csr(double* csrVal, uint64_t* csrRowPtr, uint64_t* csrColInd, 
         #pragma omp atomic
         error[0] += error[i];
     }
+    error[0] = sqrt(error[0]);
 }
-
-__global__ void prefix_sum(uint64_t * array)
-{
-    uint64_t stride = 1;
-    while(stride <= blockDim.x)
-    {
-        uint64_t index = 2 * stride * (threadIdx.x + 1) - 1;
-        if(index < 2 * blockDim.x)
-        {
-            array[index] += array[index - stride];
-        }
-        stride *= 2;
-        __syncthreads();
-    }
-
-    stride = blockDim.x / 2;
-    while(stride > 0)
-    {
-        uint64_t index = 2 * stride * (threadIdx.x + 1) - 1;
-        if(index + stride < 2 * blockDim.x)
-        {
-            array[index + stride] += array[index];
-        }
-        stride /= 2;
-        __syncthreads();
-    }
-}
-
 #endif // PAGERANK_HPP

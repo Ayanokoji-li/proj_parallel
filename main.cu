@@ -9,7 +9,7 @@
 std::string indicator[] = {"-method", "-file", "-noTranspose"};
 
 int main(int argc, char** argv) {
-    std::string file_name = "out.mtx";
+    std::string file_name = "data/web-Google.mtx";
     COM_TYPE method = COM_TYPE::GPU;
     bool isTranspose = true;
     if(argc == 1) 
