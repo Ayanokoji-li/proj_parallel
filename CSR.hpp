@@ -240,11 +240,10 @@ struct CSRMatrix {
                 {
                     PageRank_cuda_csr<<<(N + 255) / 256, 256>>>(d_Val, d_RowPtr, d_ColData, d_x, d_y,d_error, N, damping);
                     cudaMemcpy(error, d_error,sizeof(double), cudaMemcpyDeviceToHost);
+                    cudaMemcpy(res, d_y,sizeof(double), cudaMemcpyDeviceToHost);
                 }
                 else
                 {
-                    // PageRank_cuda_csc<<<(N + 255) / 256, 256>>>(d_Val, d_RowPtr, d_ColData, d_x, d_y, d_error, N, damping);
-                    // csc_process<<<(N + 255) / 256, 256>>>(d_x, d_y, d_error, N, damping);
                     PageRank_cpu_csc(csrVal, csrRowPtr, csrColInd, x, res, error, N, damping);
                     std::swap(x, res);
                     memset(res, 0, N * sizeof(double));
@@ -264,12 +263,6 @@ struct CSRMatrix {
 
         if(com_tpye == COM_TYPE::GPU)
         {
-            // cudaMemcpy(res, d_x, N * sizeof(double), cudaMemcpyDeviceToHost);
-            for(auto i = 0; i < 10; i ++)
-            {
-                std::cout << res[i] << std::endl;
-            
-            }
         }
         else
         {

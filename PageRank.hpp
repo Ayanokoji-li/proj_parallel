@@ -53,8 +53,6 @@ __global__ void PageRank_cuda_csr(double* csrVal, uint64_t* csrRowPtr, uint64_t*
 
     if (i == 0) {
         error[0] = sqrt(error[0]);
-        printf("error: %f\n", error[0]);
-        printf("y[0]: %e\n", y[0]);
     }
 }
 
@@ -66,13 +64,8 @@ __global__ void PageRank_cuda_csc(double *cscVal, uint64_t *cscColPtr, uint64_t 
         for (auto j = cscColPtr[i]; j < cscColPtr[i + 1]; j++)
         {
             auto row = cscRowInd[j];
-            double tmp = x[row] * cscVal[j];
-            atomicAdd((double *)&error[row], tmp);
-            if(row == 0)
-            {
-                printf("y[0]: %e\n", error[row]);
-                printf("tmp: %e\n", tmp);
-            }
+            double tmp = x[i] * cscVal[row];
+            atomicAdd((double *)&y[row], tmp);
         }
     }
 }
@@ -95,10 +88,10 @@ __global__ void csc_process(double *x, double *y, double *error, uint64_t num_no
 
 void PageRank_cpu_csr(double* csrVal, uint64_t* csrRowPtr, uint64_t* csrColInd, double* x, double* y, double* error, uint64_t num_nodes, double damping_factor = DAMPING_FACTOR) {
     #pragma omp parallel for
-    for (int i = 0; i < num_nodes; i++) {
+    for (uint64_t i = 0; i < num_nodes; i++) {
         double sum = 0.0f;
-        for (int j = csrRowPtr[i]; j < csrRowPtr[i + 1]; j++) {
-            int col = csrColInd[j];
+        for (auto j = csrRowPtr[i]; j < csrRowPtr[i + 1]; j++) {
+            uint64_t col = csrColInd[j];
             sum += x[col] * (double)csrVal[j];
         }
         y[i] = (1 - damping_factor) / num_nodes + damping_factor * sum;
@@ -111,60 +104,29 @@ void PageRank_cpu_csr(double* csrVal, uint64_t* csrRowPtr, uint64_t* csrColInd, 
         #pragma omp atomic
         error[0] += error[i];
     }
+    error[0] = std::sqrt(error[0]);
 }
 
 void PageRank_cpu_csc(double *cscVal, uint64_t *cscColPtr, uint64_t *cscRowInd, double *x, double *y, double *error, uint64_t num_nodes, double damping_factor = DAMPING_FACTOR)
 {
-    #pragma omp parallel for
-    for (int i = 0; i < num_nodes; i++)
+    for(uint64_t i = 0 ; i < num_nodes; i ++)
     {
-        for (int j = cscColPtr[i]; j < cscColPtr[i + 1]; j++)
+        for(auto j = cscColPtr[i]; j < cscColPtr[i + 1]; j ++)
         {
-            int row = cscRowInd[j];
-            double tmp = x[row] * cscVal[j];
-            #pragma omp atomic
+            auto row = cscRowInd[j];
+            double tmp = x[i] * cscVal[row];
             y[row] += tmp;
         }
     }
-    #pragma omp parallel for
-    for (int i = 0; i < num_nodes; i++)
+    for(uint64_t i = 0; i < num_nodes; i ++)
     {
         y[i] = (1 - damping_factor) / num_nodes + damping_factor * y[i];
         error[i] = (y[i] - x[i]) * (y[i] - x[i]);
     }
-    #pragma omp parallel for
-    for (int i = 1; i < num_nodes; i++)
+    for(uint64_t i = 1; i < num_nodes; i ++)
     {
-        #pragma omp atomic
         error[0] += error[i];
     }
 }
-
-// __global__ void prefix_sum(uint64_t * array)
-// {
-//     uint64_t stride = 1;
-//     while(stride <= blockDim.x)
-//     {
-//         uint64_t index = 2 * stride * (threadIdx.x + 1) - 1;
-//         if(index < 2 * blockDim.x)
-//         {
-//             array[index] += array[index - stride];
-//         }
-//         stride *= 2;
-//         __syncthreads();
-//     }
-
-//     stride = blockDim.x / 2;
-//     while(stride > 0)
-//     {
-//         uint64_t index = 2 * stride * (threadIdx.x + 1) - 1;
-//         if(index + stride < 2 * blockDim.x)
-//         {
-//             array[index + stride] += array[index];
-//         }
-//         stride /= 2;
-//         __syncthreads();
-//     }
-// }
 
 #endif // PAGERANK_HPP
