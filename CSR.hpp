@@ -243,7 +243,6 @@ struct CSRMatrix {
                 PageRank_cpu_csr(csrVal, csrRowPtr, csrColInd, x, res, error, N);
                 std::swap(x, res);
             }
-            std::cout << "error = " << error[0] << std::endl;
             iterations++;
         }
 
