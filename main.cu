@@ -51,7 +51,6 @@ int main(int argc, char** argv) {
     }
 
     // Initialize host value
-    std::cout << "init matrix" << std::endl;
     CSRMatrix matrix(file_name);
     CSRMatrix transition{};
     TransitionProb(matrix, transition, isTranspose);

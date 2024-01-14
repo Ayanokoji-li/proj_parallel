@@ -104,37 +104,34 @@ struct CSRMatrix {
         memset(dst.csrColInd, 0, (VertexNum + 1) * sizeof(double));
 
         // col_index, row_index
-
-        COO coo(EdgeNum);
         #pragma omp parallel for
         for(uint64_t i = 0; i < VertexNum; i++)
         {
             for(uint64_t j = csrRowPtr[i]; j < csrRowPtr[i + 1]; j++)
             {
-                coo[j] = std::make_tuple(csrColInd[j], i, csrVal[j]);
+                #pragma omp atomic
+                dst.csrRowPtr[csrColInd[j]+1]++;
             }
         }
 
-        std::stable_sort(coo.begin(), coo.end(), comp_1());
-
-        std::vector<uint64_t> row_num(VertexNum+1, 0);
-        std::vector<uint64_t> row_num_tmp(VertexNum+1, 0);
-        for(uint64_t i = 0; i < EdgeNum; i++)
+        prefix_sum(dst.csrRowPtr, VertexNum + 1);
+        uint64_t* col_num = (uint64_t*)malloc(VertexNum * sizeof(uint64_t));
+        memcpy(col_num, dst.csrRowPtr, VertexNum * sizeof(uint64_t));
+        #pragma omp parallel for
+        for(uint64_t i = 0; i < VertexNum; i++)
         {
-            row_num[std::get<0>(coo[i]) + 1]++;
+            for(uint64_t j = csrRowPtr[i]; j < csrRowPtr[i + 1]; j++)
+            {
+                uint64_t pos;
+                #pragma omp critical
+                {
+                    pos = col_num[csrColInd[j]] ++;
+                }
+                dst.csrVal[pos] = csrVal[j];
+                dst.csrColInd[pos] = i;
+            }
         }
 
-        dst.csrRowPtr[0] = 0;
-        for(uint64_t i = 0; i < EdgeNum; i++)
-        {
-            dst.csrVal[i] = std::get<2>(coo[i]);
-            dst.csrColInd[i] = std::get<1>(coo[i]);
-            dst.csrRowPtr[std::get<0>(coo[i]) + 1]++;
-        }
-        for(uint64_t i = 1; i <= VertexNum; i++)
-        {
-            dst.csrRowPtr[i] += dst.csrRowPtr[i - 1];
-        }
     }
 
     void readFromFile(const std::string &fileName)
@@ -261,8 +258,6 @@ struct CSRMatrix {
 
 void TransitionProb(CSRMatrix &src, CSRMatrix &dst, bool isTranspose = true)
 {   
-    std::cout << "TransitionProb start" << std::endl;
-    auto start = omp_get_wtime();
     CSRMatrix tmp;
     tmp.VertexNum = src.VertexNum;
     tmp.EdgeNum = src.EdgeNum;
@@ -285,9 +280,6 @@ void TransitionProb(CSRMatrix &src, CSRMatrix &dst, bool isTranspose = true)
         }
         tmp.csrRowPtr[i + 1] = src.csrRowPtr[i + 1];
     }
-    auto end = omp_get_wtime();
-    std::cout << "TransitionProb(without transpose) speed: " << GET_GTEPS(end-start, tmp.EdgeNum) << " GTEPS" << std::endl;
-    std::cout << "TransitionProb(without transpose) time " << end-start << " s" << std::endl;
     if(isTranspose == true)
         tmp.Transpose(dst);
     else
