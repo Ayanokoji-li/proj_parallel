@@ -20,8 +20,9 @@ __forceinline__ __device__ void atomicadd(double* address, double val)
 
 __forceinline__ __device__
 double warpReduceSum(double val) {
-  for (int offset = warpSize/2; offset > 0; offset /= 2) 
-    val += __shfl_down(val, offset);
+  for (unsigned int offset = warpSize/2; offset > 0; offset /= 2) 
+    val += __shfl_down_sync(0xFFFFFFFF, val, offset);
+    printf("var = %e\n", val);
   return val;
 }
 
@@ -57,16 +58,17 @@ __global__ void deviceReduceKernel(double* in, double* out, int N)
   }
   sum = blockReduceSum(sum);
   if (threadIdx.x==0)
+  {
     out[blockIdx.x]=sum;
+  }
 }
 
+// wrong. always output zero
 void deviceReduce(double *in, double* out, uint64_t N) {
   uint64_t threads = 512;
   uint64_t blocks = min((N + threads - 1) / threads, 1024LU);
-  double *tmp;
-  cudaMalloc(&tmp, 1024*sizeof(double));
-  deviceReduceKernel<<<blocks, threads>>>(in, tmp, N);
-  deviceReduceKernel<<<1, 1024>>>(tmp, out, blocks);
+  deviceReduceKernel<<<blocks, threads>>>(in, out, N);
+  deviceReduceKernel<<<1, 1024>>>(out, out, blocks);
 }
 
 __global__ void prefix_sum(uint64_t * array)

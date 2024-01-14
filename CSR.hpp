@@ -95,6 +95,8 @@ struct CSRMatrix {
 
     void Transpose(CSRMatrix &dst)
     {
+        std::cout << "Transpose start" << std::endl;
+        auto start = omp_get_wtime();
         dst.VertexNum = VertexNum;
         dst.EdgeNum = EdgeNum;
         dst.csrVal = (double*)malloc(EdgeNum * sizeof(double));
@@ -131,7 +133,8 @@ struct CSRMatrix {
                 dst.csrColInd[pos] = i;
             }
         }
-
+        auto end = omp_get_wtime();
+        std::cout << "Transpose speed: " << GET_GTEPS(end-start, EdgeNum) << " GTEPS" << std::endl;
     }
 
     void readFromFile(const std::string &fileName)
@@ -140,6 +143,8 @@ struct CSRMatrix {
         std::string line;
         uint64_t numRows, numCols;
 
+        auto start = omp_get_wtime();
+        std::cout << "Read file start" << std::endl;
         // Skip header
         do {
             std::getline(file, line);
@@ -167,6 +172,9 @@ struct CSRMatrix {
         {
             csrRowPtr[i] += csrRowPtr[i - 1];
         }
+
+        auto end = omp_get_wtime();
+        std::cout << "Read file speed: " << GET_GTEPS(end-start, EdgeNum) << " GTEPS" << std::endl;
     }
 
     void runPageRank(double* res,COM_TYPE com_tpye = COM_TYPE::GPU, double damping = 0.85, double error_lim = EPSILON, uint64_t max_iter = 1000)
@@ -190,6 +198,8 @@ struct CSRMatrix {
         // Initialize device value
         if(com_tpye == COM_TYPE::GPU)
         {
+            std::cout << "init GPU" << std::endl;
+            auto start = omp_get_wtime();
             cudaMalloc((void**)&d_Val, EdgeNum * sizeof(double));
             cudaMalloc((void**)&d_RowPtr, (VertexNum + 1) * sizeof(uint64_t));
             cudaMalloc((void**)&d_ColData, EdgeNum * sizeof(uint64_t));
@@ -201,35 +211,48 @@ struct CSRMatrix {
             cudaMemcpy(d_x, x, N * sizeof(double), cudaMemcpyHostToDevice);
             cudaMemcpy(d_y, x, N * sizeof(double), cudaMemcpyHostToDevice);
             cudaMalloc((void**)&d_error, N * sizeof(double));
+            auto end = omp_get_wtime();
+            std::cout << "Init speed: " << GET_GTEPS(end-start, EdgeNum) << " GTEPS" << std::endl;
         }
 
         // Perform PageRank iterations
         
-        while (iterations < max_iter) 
+        std::cout << "Start PageRank" << std::endl;
+        auto start = omp_get_wtime();
+        while (iterations < max_iter && error[0] > error_lim) 
         {
-            memset(error, 0, N * sizeof(double));
             if(com_tpye == COM_TYPE::GPU)
             {
                 if(isCSC == false)
                 {
                     PageRank_cuda_csr<<<(N + 255) / 256, 256>>>(d_Val, d_RowPtr, d_ColData, d_x, d_y,d_error, N, damping);
+                    cudaDeviceSynchronize();
+                    simple_reduce<<<(N + 255) / 256, 256>>>(d_error, N);
                     cudaMemcpy(error, d_error,sizeof(double), cudaMemcpyDeviceToHost);
-                    cudaMemcpy(res, d_y,sizeof(double), cudaMemcpyDeviceToHost);
+                    error[0] = std::sqrt(error[0]);
                 }
                 else
                 {
-                    // PageRank_cpu_csc(csrVal, csrRowPtr, csrColInd, x, res, error, N, damping);
+                    // wrong
                     PageRank_cuda_csc<<<(N + 255) / 256, 256>>>(d_Val, d_RowPtr, d_ColData, d_x, d_y,d_error, N, damping);
                     cudaDeviceSynchronize();
                     csc_process<<<(N + 255) / 256, 256>>>(d_x, d_y, d_error, N, damping);
-                    std::swap(x, res);
-                    memset(res, 0, N * sizeof(double));
+                    cudaDeviceSynchronize();
+                    deviceReduce(d_error, d_error, N);
                 }
                 std::swap(d_x, d_y);
             }
             else
             {
-                PageRank_cpu_csr(csrVal, csrRowPtr, csrColInd, x, res, error, N);
+                memset(error, 0, N * sizeof(double));
+                if(isCSC == false)
+                {
+                    PageRank_cpu_csr(csrVal, csrRowPtr, csrColInd, x, res, error, N);
+                }
+                else
+                {
+                    PageRank_cpu_csc(csrVal, csrRowPtr, csrColInd, x, res, error, N, damping);
+                }
                 std::swap(x, res);
             }
             iterations++;
@@ -237,6 +260,7 @@ struct CSRMatrix {
 
         if(com_tpye == COM_TYPE::GPU)
         {
+            cudaMemcpy(res, d_x, N*sizeof(double), cudaMemcpyDeviceToHost);
         }
         else
         {
@@ -244,6 +268,8 @@ struct CSRMatrix {
         }
 
         auto end = omp_get_wtime();
+        std::cout << "PageRank speed: " << GET_GTEPS(end-start, EdgeNum * (iterations+1)) << "GTEPS" << std::endl;
+
         // Free memory on the device
         cudaFree(d_RowPtr);
         cudaFree(d_ColData);
@@ -258,6 +284,8 @@ struct CSRMatrix {
 
 void TransitionProb(CSRMatrix &src, CSRMatrix &dst, bool isTranspose = true)
 {   
+    std::cout << "TransitionProb start" << std::endl;
+    auto start = omp_get_wtime();
     CSRMatrix tmp;
     tmp.VertexNum = src.VertexNum;
     tmp.EdgeNum = src.EdgeNum;
@@ -280,6 +308,8 @@ void TransitionProb(CSRMatrix &src, CSRMatrix &dst, bool isTranspose = true)
         }
         tmp.csrRowPtr[i + 1] = src.csrRowPtr[i + 1];
     }
+    auto end = omp_get_wtime();
+    std::cout << "TransitionProb(without transpose) speed: " << GET_GTEPS(end-start, tmp.EdgeNum) << " GTEPS" << std::endl;
     if(isTranspose == true)
         tmp.Transpose(dst);
     else

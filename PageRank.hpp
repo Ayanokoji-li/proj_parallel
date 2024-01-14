@@ -45,14 +45,15 @@ __global__ void PageRank_cuda_csr(double* csrVal, uint64_t* csrRowPtr, uint64_t*
         }
         y[i] = (1 - damping_factor) / num_nodes + damping_factor * sum;
         error[i] = (y[i] - x[i]) * (y[i] - x[i]);
-        atomicAdd(error, error[i]);
     }
+}
 
-    __syncthreads();
-    // reduction error
-
-    if (i == 0) {
-        error[0] = sqrt(error[0]);
+__global__ void simple_reduce(double* error, uint64_t N)
+{
+    uint64_t i = blockIdx.x * blockDim.x + threadIdx.x;
+    if(i < N && i != 0)
+    {
+        atomicAdd(error, error[i]);
     }
 }
 
@@ -77,12 +78,6 @@ __global__ void csc_process(double *x, double *y, double *error, uint64_t num_no
     {
         y[i] = (1 - damping_factor) / num_nodes + damping_factor * y[i];
         error[i] = (y[i] - x[i]) * (y[i] - x[i]);
-        atomicAdd(&error[0], error[i]);
-    }
-    __syncthreads();
-    if (i == 0) {
-        error[0] = sqrt(error[0]);
-        printf("error: %e\n", error[0]);
     }
 }
 
@@ -116,6 +111,7 @@ void PageRank_cpu_csc(double *cscVal, uint64_t *cscColPtr, uint64_t *cscRowInd, 
             y[row] += tmp;
         }
     }
+    #pragma omp parallel for
     for(uint64_t i = 0; i < num_nodes; i ++)
     {
         y[i] = (1 - damping_factor) / num_nodes + damping_factor * y[i];
