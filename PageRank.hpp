@@ -99,9 +99,7 @@ void PageRank_cpu_csr(double* csrVal, uint64_t* csrRowPtr, uint64_t* csrColInd, 
     }
 
     //reduction error
-    #pragma omp parallel for
     for(auto i = 1; i < num_nodes; i ++) {
-        #pragma omp atomic
         error[0] += error[i];
     }
     error[0] = std::sqrt(error[0]);

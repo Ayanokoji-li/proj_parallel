@@ -9,8 +9,8 @@
 std::string indicator[] = {"-method", "-file", "-noTranspose"};
 
 int main(int argc, char** argv) {
-    std::string file_name = "data/web-Google.mtx";
-    COM_TYPE method = COM_TYPE::GPU;
+    std::string file_name = "data/wiki-Talk.mtx";
+    COM_TYPE method = COM_TYPE::CPU;
     bool isTranspose = true;
     if(argc == 1) 
     {
@@ -58,7 +58,7 @@ int main(int argc, char** argv) {
     // EFGMatrix efg();
     uint64_t N = transition.VertexNum;
     double* y = (double*)malloc(N * sizeof(double));
-    transition.runPageRank(y, method, 0.85, EPSILON, 8);
+    transition.runPageRank(y, method, 0.85, EPSILON, 100);
     std::cout << "run end" << std::endl;
 
     // free(y);

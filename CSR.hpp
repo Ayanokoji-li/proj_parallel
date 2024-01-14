@@ -95,8 +95,6 @@ struct CSRMatrix {
 
     void Transpose(CSRMatrix &dst)
     {
-        std::cout << "Transpose start" << std::endl;
-        auto start = omp_get_wtime();
         dst.VertexNum = VertexNum;
         dst.EdgeNum = EdgeNum;
         dst.csrVal = (double*)malloc(EdgeNum * sizeof(double));
@@ -108,15 +106,12 @@ struct CSRMatrix {
         // col_index, row_index
 
         COO coo(EdgeNum);
-        std::vector<uint64_t> col_num(VertexNum, 0);
         #pragma omp parallel for
         for(uint64_t i = 0; i < VertexNum; i++)
         {
             for(uint64_t j = csrRowPtr[i]; j < csrRowPtr[i + 1]; j++)
             {
                 coo[j] = std::make_tuple(csrColInd[j], i, csrVal[j]);
-                #pragma omp atomic
-                col_num[csrColInd[j]]++;
             }
         }
 
@@ -124,7 +119,6 @@ struct CSRMatrix {
 
         std::vector<uint64_t> row_num(VertexNum+1, 0);
         std::vector<uint64_t> row_num_tmp(VertexNum+1, 0);
-        #pragma omp parallel for
         for(uint64_t i = 0; i < EdgeNum; i++)
         {
             row_num[std::get<0>(coo[i]) + 1]++;
@@ -141,10 +135,6 @@ struct CSRMatrix {
         {
             dst.csrRowPtr[i] += dst.csrRowPtr[i - 1];
         }
-        
-        auto end = omp_get_wtime();
-        std::cout << "Transpose speed: " << GET_GTEPS(end-start, EdgeNum) << " GTEPS" << std::endl;
-        std::cout << "Transpose time " << end-start << " s" << std::endl;
     }
 
     void readFromFile(const std::string &fileName)
@@ -153,8 +143,6 @@ struct CSRMatrix {
         std::string line;
         uint64_t numRows, numCols;
 
-        auto start = omp_get_wtime();
-        std::cout << "Read file start" << std::endl;
         // Skip header
         do {
             std::getline(file, line);
@@ -182,10 +170,6 @@ struct CSRMatrix {
         {
             csrRowPtr[i] += csrRowPtr[i - 1];
         }
-
-        auto end = omp_get_wtime();
-        std::cout << "Read file speed: " << GET_GTEPS(end-start, EdgeNum) << " GTEPS" << std::endl;
-        std::cout << "Read file time " << end-start << " s" << std::endl;
     }
 
     void runPageRank(double* res,COM_TYPE com_tpye = COM_TYPE::GPU, double damping = 0.85, double error_lim = EPSILON, uint64_t max_iter = 1000)
@@ -209,8 +193,6 @@ struct CSRMatrix {
         // Initialize device value
         if(com_tpye == COM_TYPE::GPU)
         {
-            std::cout << "init GPU" << std::endl;
-            auto start = omp_get_wtime();
             cudaMalloc((void**)&d_Val, EdgeNum * sizeof(double));
             cudaMalloc((void**)&d_RowPtr, (VertexNum + 1) * sizeof(uint64_t));
             cudaMalloc((void**)&d_ColData, EdgeNum * sizeof(uint64_t));
@@ -222,16 +204,11 @@ struct CSRMatrix {
             cudaMemcpy(d_x, x, N * sizeof(double), cudaMemcpyHostToDevice);
             cudaMemcpy(d_y, x, N * sizeof(double), cudaMemcpyHostToDevice);
             cudaMalloc((void**)&d_error, N * sizeof(double));
-            auto end = omp_get_wtime();
-            std::cout << "Init speed: " << GET_GTEPS(end-start, EdgeNum) << " GTEPS" << std::endl;
-            std::cout << "Init time " << end-start << " s" << std::endl;
         }
 
         // Perform PageRank iterations
         
-        std::cout << "Start PageRank" << std::endl;
-        auto start = omp_get_wtime();
-        while (error[0] > EPSILON && iterations < max_iter) 
+        while (iterations < max_iter) 
         {
             memset(error, 0, N * sizeof(double));
             if(com_tpye == COM_TYPE::GPU)
@@ -244,13 +221,13 @@ struct CSRMatrix {
                 }
                 else
                 {
-                    PageRank_cpu_csc(csrVal, csrRowPtr, csrColInd, x, res, error, N, damping);
+                    // PageRank_cpu_csc(csrVal, csrRowPtr, csrColInd, x, res, error, N, damping);
+                    PageRank_cuda_csc<<<(N + 255) / 256, 256>>>(d_Val, d_RowPtr, d_ColData, d_x, d_y,d_error, N, damping);
+                    cudaDeviceSynchronize();
+                    csc_process<<<(N + 255) / 256, 256>>>(d_x, d_y, d_error, N, damping);
                     std::swap(x, res);
                     memset(res, 0, N * sizeof(double));
-                    error[0] = std::sqrt(error[0]);
                 }
-                std::cout << "iterations: " << iterations << std::endl;
-                std::cout << "error: " << error[0] << std::endl;
                 std::swap(d_x, d_y);
             }
             else
@@ -270,9 +247,6 @@ struct CSRMatrix {
         }
 
         auto end = omp_get_wtime();
-        std::cout << "PageRank speed: " << GET_GTEPS(end-start, EdgeNum * (iterations+1)) << "GTEPS" << std::endl;
-        std::cout << "PageRank time " << end-start << " s" << std::endl;
-
         // Free memory on the device
         cudaFree(d_RowPtr);
         cudaFree(d_ColData);
